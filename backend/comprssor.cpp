@@ -4,24 +4,70 @@
 #include <string>
 #include <zstd.h>
 
-std::vector<uint8_t> readFile(const std::string &fileName){
+std::vector<char> readFile(const std::string &fileName) {
     
-    std::ifstream file(fileName, std::ios::binary);
+    std::ifstream inFile(fileName, std::ios_base::binary | std::ios_base::ate);
     
-    if(!file){
-        throw std::runtime_error("Failed to open file!");
+    if (!inFile) {
+        throw std::runtime_error("Error opening input file: " + fileName);
     }
 
-    return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>())
+    std::streamsize fileSize = inFile.tellg();
+    inFile.seekg(0, std::ios_base::beg);
+
+    std::vector<char> buffer(fileSize);
+    inFile.read(buffer.data(), fileSize);
+
+    return buffer;
 }
 
-void writeFile(const std::string& filename, const std::vector<uint8_t>& data){
+void writeFile(const std::string &fileName, const std::vector<char> &buffer) {
     
-    std::ofstream file(filename, std::ios::binary);
+    std::ofstream outFile(fileName, std::ios_base::binary);
     
-    if (!file) {
-        throw std::runtime_error("Failed to open file: " + filename);
+    if (!outFile) {
+        throw std::runtime_error("Error opening output file: " + fileName);
     }
+
+    outFile.write(buffer.data(), buffer.size());
+}
+
+void compressFile(const std::string &inputFileName, const std::string &outputFileName){
     
-    file.write(reinterpret_cast<const char*>(data.data()), data.size());
+    std::vector<char> buffer = readFile(inputFileName);
+
+    size_t compressedBound = ZSTD_compressBound(buffer.size());
+    std::vector<char> compressedBuffer(compressedBound);
+
+    size_t compressedSize = ZSTD_compress(compressedBuffer.data(), compressedBound, buffer.data(), buffer.size(), 1);
+    if (ZSTD_isError(compressedSize)) {
+        throw std::runtime_error("Compression failed: " + std::string(ZSTD_getErrorName(compressedSize)));
+    }
+
+    compressedBuffer.resize(compressedSize);
+    writeFile(outputFileName, compressedBuffer);
+
+    std::cout << "File compressed successfully!" << std::endl;
+}
+
+void decompressFile(const std::string &inputFileName, const std::string &outputFileName) {
+    std::vector<char> compressedBuffer = readFile(inputFileName);
+
+    unsigned long long decompressedSize = ZSTD_getFrameContentSize(compressedBuffer.data(), compressedBuffer.size());
+    if (decompressedSize == ZSTD_CONTENTSIZE_ERROR) {
+        throw std::runtime_error("Invalid compressed file");
+    } else if (decompressedSize == ZSTD_CONTENTSIZE_UNKNOWN) {
+        throw std::runtime_error("Original size unknown");
+    }
+
+    std::vector<char> decompressedBuffer(decompressedSize);
+
+    size_t actualDecompressedSize = ZSTD_decompress(decompressedBuffer.data(), decompressedSize, compressedBuffer.data(), compressedBuffer.size());
+    if (ZSTD_isError(actualDecompressedSize)) {
+        throw std::runtime_error("Decompression failed: " + std::string(ZSTD_getErrorName(actualDecompressedSize)));
+    }
+
+    writeFile(outputFileName, decompressedBuffer);
+
+    std::cout << "File decompressed successfully!" << std::endl;
 }
