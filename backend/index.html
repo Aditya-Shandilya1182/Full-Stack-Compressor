@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Compressor/Decompressor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 50px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        input[type="file"] {
+            margin-bottom: 20px;
+        }
+        button {
+            margin-right: 10px;
+        }
+        #download-link {
+            display: none;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>File Compressor/Decompressor</h1>
+        <input type="file" id="fileInput">
+        <div>
+            <button onclick="compressFile()">Compress</button>
+            <button onclick="decompressFile()">Decompress</button>
+        </div>
+        <a id="download-link" download>Download Processed File</a>
+    </div>
+    <script>
+        async function uploadFile(url) {
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput.files.length) {
+                alert("Please select a file.");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await fetch(url, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                const blob = await response.blob();
+                const downloadLink = document.getElementById('download-link');
+                const url = window.URL.createObjectURL(blob);
+                downloadLink.href = url;
+                downloadLink.download = file.name;
+                downloadLink.style.display = 'block';
+            } else {
+                alert("Error processing file.");
+            }
+        }
+
+        function compressFile() {
+            uploadFile('http://localhost:8000/compress/');
+        }
+
+        function decompressFile() {
+            uploadFile('http://localhost:8000/decompress/');
+        }
+    </script>
+</body>
+</html>
