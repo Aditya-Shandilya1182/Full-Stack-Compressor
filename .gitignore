@@ -1,0 +1,6 @@
+.vscode
+backend/*.text
+backend/*.exe
+/backend/node_modules
+testBack
+/backend/storage
