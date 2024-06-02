@@ -2,6 +2,7 @@
 #include <cpprest/http_listener.h>
 #include <cpprest/json.h>
 #include <zstd.h>
+#include <vector>
 
 using namespace web;
 using namespace web::http;
@@ -18,11 +19,21 @@ std::pair<std::vector<char>, size_t> Compress(const std::vector<char>& data) {
     return std::make_pair(compressed_data, data.size());
 }
 
-std::vector<char> Decompress(const std::vector<char>& data, size_t original_size) {
-    std::vector<char> decompressed_data(original_size);
-    size_t decompressed_size = ZSTD_decompress(decompressed_data.data(), original_size, data.data(), data.size());
-    if (ZSTD_isError(decompressed_size)) {
-        throw std::runtime_error("Decompression failed: " + std::string(ZSTD_getErrorName(decompressed_size)));
+std::vector<char> Decompress(const std::vector<char>& data) {
+    unsigned long long decompressed_size = ZSTD_getFrameContentSize(data.data(), data.size());
+    if (decompressed_size == ZSTD_CONTENTSIZE_ERROR) {
+        throw std::runtime_error("Decompression failed: Not a valid compressed frame");
+    } else if (decompressed_size == ZSTD_CONTENTSIZE_UNKNOWN) {
+        throw std::runtime_error("Decompression failed: Original size unknown");
+    }
+
+    std::vector<char> decompressed_data(decompressed_size);
+    size_t actual_decompressed_size = ZSTD_decompress(decompressed_data.data(), decompressed_size, data.data(), data.size());
+    if (ZSTD_isError(actual_decompressed_size)) {
+        throw std::runtime_error("Decompression failed: " + std::string(ZSTD_getErrorName(actual_decompressed_size)));
+    }
+    if (actual_decompressed_size != decompressed_size) {
+        throw std::runtime_error("Decompressed size does not match the expected size");
     }
     return decompressed_data;
 }
@@ -32,9 +43,10 @@ void handleCompress(http_request request) {
         std::vector<char> buffer(body.begin(), body.end());
         try {
             auto [compressed_data, original_size] = Compress(buffer);
+            std::vector<unsigned char> compressed_data_unsigned(compressed_data.begin(), compressed_data.end());
             web::json::value json_response;
             json_response[U("message")] = web::json::value::string(U("File compressed successfully."));
-            json_response[U("compressedData")] = web::json::value::string(std::string(compressed_data.begin(), compressed_data.end()));
+            json_response[U("compressedData")] = web::json::value::string(utility::conversions::to_base64(compressed_data_unsigned));
             json_response[U("originalSize")] = web::json::value::number(original_size);
             request.reply(status_codes::OK, json_response);
         } catch (const std::exception& e) {
@@ -43,38 +55,22 @@ void handleCompress(http_request request) {
     }).wait();
 }
 
-// Handler function for decompressing HTTP requests
-void handleDecompress(web::http::http_request request) {
-    request.extract_vector().then([request](std::vector<unsigned char> body) {
-        // Extract compressed data from the request headers
-        auto compressed_data_str = request.headers().find(U("compressedData"));
-        if (compressed_data_str == request.headers().end()) {
-            throw std::runtime_error("Compressed data not found in headers");
-        }
-        utility::string_t compressed_data_str_value = compressed_data_str->second;
-
-        // Convert the compressed data string to a vector of chars
-        std::vector<char> compressed_buffer(compressed_data_str_value.begin(), compressed_data_str_value.end());
-        
+void handleDecompress(http_request request) {
+    request.extract_json().then([request](json::value body) {
         try {
-            // Extract original size from request
-            auto original_size_str = request.headers().find(U("Original-Size"));
-            if (original_size_str == request.headers().end()) {
-                throw std::runtime_error("Original size not found in headers");
-            }
-            size_t original_size = std::stoull(original_size_str->second);
-            
-            // Decompress the data
-            auto decompressed_data = Decompress(compressed_buffer, original_size);
-            
-            // Send the decompressed data in the response
-            web::http::http_response response(web::http::status_codes::OK);
+            auto compressed_data_str = body[U("compressedData")].as_string();
+            std::vector<unsigned char> compressed_data_unsigned = utility::conversions::from_base64(compressed_data_str);
+            std::vector<char> compressed_data(compressed_data_unsigned.begin(), compressed_data_unsigned.end());
+
+            auto decompressed_data = Decompress(compressed_data);
+
+            http_response response(status_codes::OK);
             response.set_body(Concurrency::streams::bytestream::open_istream(std::vector<unsigned char>(decompressed_data.begin(), decompressed_data.end())));
             response.headers().add(U("Content-Disposition"), U("attachment; filename=decompressed.txt"));
             response.headers().set_content_type(U("application/octet-stream"));
             request.reply(response);
         } catch (const std::exception& e) {
-            request.reply(web::http::status_codes::InternalError, e.what());
+            request.reply(status_codes::InternalError, e.what());
             std::cout << e.what() << std::endl;
         }
     }).wait();
@@ -84,11 +80,11 @@ void handleDecompress(web::http::http_request request) {
 void handleRequest(http_request req) {
     auto path = uri::split_path(uri::decode(req.relative_uri().path()));
     if (!path.empty()) {
-        if (path[1] == U("compress")) {
+        if (path[0] == U("compress")) {
             handleCompress(req);
-        } else if(path[1] == U("decompress")){
+        } else if (path[0] == U("decompress")) {
             handleDecompress(req);
-        }else {
+        } else {
             req.reply(status_codes::NotFound, U("Not Found"));
         }
     } else {
@@ -111,4 +107,7 @@ int main() {
 
     return 0;
 }
+
+
+
 //g++ -o compressor compressor.cpp -lssl -lcrypto -lzstd -lcpprest -lboost_system -lpthread

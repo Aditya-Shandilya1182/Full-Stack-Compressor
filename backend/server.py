@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import aiofiles
+import base64
 
 app = FastAPI()
 storage_dir = "storage"
@@ -19,7 +20,7 @@ app.add_middleware(
 if not os.path.exists(storage_dir):
     os.makedirs(storage_dir)
 
-cpp_server_url = "http://localhost:8081/api"
+cpp_server_url = "http://localhost:8081"
 
 @app.post("/compress/")
 async def compress(file: UploadFile = File(...)):
@@ -30,24 +31,22 @@ async def compress(file: UploadFile = File(...)):
         content = await file.read()
         await out_file.write(content)
 
-    # Get the file size
-    file_size = os.path.getsize(file_path)
-
     # Send the file to the C++ server for compression
     async with httpx.AsyncClient() as client:
         with open(file_path, 'rb') as f:
             response = await client.post(
                 f"{cpp_server_url}/compress",
-                files={'file': f},
-                params={'filename': file.filename},  # Pass filename as query parameter
-                headers={"Original-Size": str(file_size)}  # Send original file size in headers
+                content=f.read()
             )
     
+    response_data = response.json()
+    compressed_data = base64.b64decode(response_data['compressedData'])
+
     compressed_file_path = os.path.join(storage_dir, f"compressed_{file.filename}.zst")
     
     # Save the compressed file received from the C++ server
-    with open(compressed_file_path, 'wb') as f:
-        f.write(response.content)
+    async with aiofiles.open(compressed_file_path, 'wb') as out_file:
+        await out_file.write(compressed_data)
 
     return FileResponse(compressed_file_path, media_type='application/octet-stream', filename=f"compressed_{file.filename}.zst")
 
@@ -60,24 +59,24 @@ async def decompress(file: UploadFile = File(...)):
         content = await file.read()
         await out_file.write(content)
 
-    # Get the file size
-    file_size = os.path.getsize(file_path)
+    # Read the compressed data
+    async with aiofiles.open(file_path, 'rb') as in_file:
+        compressed_data = await in_file.read()
 
-    # Send the file to the C++ server for decompression
+    # Send the compressed data to the C++ server for decompression
     async with httpx.AsyncClient() as client:
-        with open(file_path, 'rb') as f:
-            response = await client.post(
-                f"{cpp_server_url}/decompress",
-                files={'file': f},
-                params={'filename': file.filename},  # Pass filename as query parameter
-                headers={"Original-Size": str(file_size)}  # Send original file size in headers
-            )
+        response = await client.post(
+            f"{cpp_server_url}/decompress",
+            json={
+                "compressedData": base64.b64encode(compressed_data).decode('utf-8')
+            }
+        )
 
     decompressed_file_path = os.path.join(storage_dir, f"decompressed_{file.filename[:-4]}")
     
     # Save the decompressed file received from the C++ server
-    with open(decompressed_file_path, 'wb') as f:
-        f.write(response.content)
+    async with aiofiles.open(decompressed_file_path, 'wb') as out_file:
+        await out_file.write(response.content)
 
     return FileResponse(decompressed_file_path, media_type='application/octet-stream', filename=f"decompressed_{file.filename[:-4]}")
 
